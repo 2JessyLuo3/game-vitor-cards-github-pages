@@ -112,8 +112,18 @@ motionSelect.addEventListener("change", () => {
   motionMode = motionSelect.value;
   writePreference("motion", motionMode);
   updateMotion();
+  if (minimalMotion() && activeCard) {
+    stopInertia(activeCard);
+    if (readyForInput()) settleFace(activeCard);
+  }
 });
-reducedMotion.addEventListener?.("change", updateMotion);
+reducedMotion.addEventListener?.("change", () => {
+  updateMotion();
+  if (minimalMotion() && activeCard) {
+    stopInertia(activeCard);
+    if (readyForInput()) settleFace(activeCard);
+  }
+});
 updateMotion();
 
 function randomInteger(maxInclusive) {
@@ -166,7 +176,7 @@ function updateInstruction() {
   instruction.hidden = !activeCard;
   instruction.textContent = needsScroll
     ? "Clique para virar. Arraste para girar. Para ler tudo: roda do mouse ou dois dedos."
-    : "Clique para virar. Arraste para girar. Próximo troca a pergunta.";
+    : "Clique para virar. Arraste e solte para girar. Próximo troca a pergunta.";
 }
 window.addEventListener("resize", () => { if (activeCard) updateInterface(); });
 
@@ -274,7 +284,8 @@ function makeCard(question, revealed = false) {
   bob.append(button);
   card.append(bob);
   card.interaction = { q: revealed ? [0, 1, 0, 0] : [0, 0, 0, 1], textVisible: revealed,
-    pointer: null, reader: null, suppressClick: false, frame: null, finish: null };
+    pointer: null, reader: null, suppressClick: false, frame: null, finish: null,
+    inertiaFrame: null, angularVelocity: [0, 0, 0] };
   attachInteraction(card, button);
   applyOrientation(card, card.interaction.q);
   return card;
@@ -329,6 +340,85 @@ function applyOrientation(card, q) {
 function settleFace(card) {
   setState(card.interaction.textVisible ? STATES.IDLE_OPEN : STATES.IDLE_CLOSED);
 }
+
+// The same world-space angular vector drives dragging and free rotation on all
+// three axes. No Euler angles: combined turns remain stable and text can always
+// return to the canonical upright pose when clicked.
+const MAX_ANGULAR_SPEED = 18; // radians/second, magnitude across all three axes
+const INERTIA_FRICTION = 3.7; // exponential damping per second
+const MIN_ANGULAR_SPEED = .045;
+function rotateByVector(card, vector) {
+  const angle = Math.hypot(...vector);
+  if (!angle) return;
+  const scale = Math.sin(angle / 2) / angle;
+  applyOrientation(card, multiplyQuaternion([
+    vector[0] * scale, vector[1] * scale, vector[2] * scale, Math.cos(angle / 2)
+  ], card.interaction.q));
+}
+function stopInertia(card) {
+  const interaction = card.interaction;
+  cancelAnimationFrame(interaction.inertiaFrame);
+  interaction.inertiaFrame = null;
+  interaction.angularVelocity = [0, 0, 0];
+  card.classList.remove("is-spinning");
+}
+function releaseVelocity(pointer, now) {
+  const samples = pointer.samples.filter(sample => now - sample.at <= 120);
+  if (!samples.length || pointer.scrolling) return [0, 0, 0];
+  // Time-weighted recent samples keep a tiny final move from erasing a throw.
+  // Pausing before release deliberately stops the card instead of reviving a
+  // gesture from earlier in the drag.
+  const age = Math.max(0, now - samples.at(-1).at);
+  if (age >= 120) return [0, 0, 0];
+  let weight = 0;
+  const velocity = [0, 0, 0];
+  for (const sample of samples) {
+    const w = Math.min(sample.duration, .05) * Math.exp(-(now - sample.at) / 90);
+    weight += w;
+    for (let axis = 0; axis < 3; axis++) velocity[axis] += sample.velocity[axis] * w;
+  }
+  if (!weight) return [0, 0, 0];
+  const torque = (.5 + .5 * pointer.leverage) * Math.exp(-age / 70);
+  const average = velocity.map(value => value / weight * torque);
+  const speed = Math.hypot(...average);
+  return average.map(value => value * Math.min(1, MAX_ANGULAR_SPEED / (speed || 1)));
+}
+function startInertia(card, velocity) {
+  stopInertia(card);
+  if (minimalMotion() || Math.hypot(...velocity) < MIN_ANGULAR_SPEED) return;
+  const interaction = card.interaction;
+  interaction.angularVelocity = velocity;
+  card.classList.add("is-spinning");
+  let last = performance.now();
+  function frame(now) {
+    interaction.inertiaFrame = null;
+    if (card !== activeCard || drawerOpen || !readyForInput() || interaction.pointer || minimalMotion()) {
+      stopInertia(card);
+      return;
+    }
+    const elapsed = Math.max(0, (now - last) / 1000);
+    last = now;
+    const friction = motionMode === "fast" ? 5.8 : INERTIA_FRICTION;
+    const decay = Math.exp(-friction * elapsed);
+    // Integrate the damped velocity exactly: the travel and stopping point are
+    // equivalent at 30, 60 or 120 Hz, rather than depending on the frame rate.
+    let travel = (1 - decay) / friction;
+    // A delayed frame still loses its elapsed energy, but displays at most a
+    // 20-degree step instead of jumping through several turns. Hidden tabs are
+    // stopped by visibilitychange, independently of the render schedule.
+    if (elapsed > .1) travel = Math.min(travel, .35 / Math.hypot(...interaction.angularVelocity));
+    rotateByVector(card, interaction.angularVelocity.map(value => value * travel));
+    interaction.angularVelocity = interaction.angularVelocity.map(value => value * decay);
+    if (Math.hypot(...interaction.angularVelocity) >= MIN_ANGULAR_SPEED) {
+      interaction.inertiaFrame = requestAnimationFrame(frame);
+    } else {
+      stopInertia(card);
+      settleFace(card);
+      if (interaction.textVisible) announceQuestion(questionById.get(card.dataset.id));
+    }
+  }
+  interaction.inertiaFrame = requestAnimationFrame(frame);
+}
 function releasePointer(card) {
   const interaction = card.interaction;
   const pointer = interaction.pointer;
@@ -342,6 +432,7 @@ function releasePointer(card) {
   if (pointer && button.hasPointerCapture?.(pointer.id)) button.releasePointerCapture(pointer.id);
 }
 function cancelInteraction(card) {
+  stopInertia(card);
   releasePointer(card);
   const interaction = card.interaction;
   cancelAnimationFrame(interaction.frame);
@@ -363,9 +454,16 @@ function attachInteraction(card, button) {
       return;
     }
     if (drawerOpen || card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
+    stopInertia(card);
+    // The card wrapper stays centered while its inner rotor turns. Capture the
+    // grab point from that stable rectangle, not from the rotating face bounds.
+    const bounds = card.getBoundingClientRect();
+    const grabX = Math.max(-1, Math.min(1, (event.clientX - bounds.left - bounds.width / 2) / (bounds.width / 2)));
+    const grabY = Math.max(-1, Math.min(1, (event.clientY - bounds.top - bounds.height / 2) / (bounds.height / 2)));
     interaction.suppressClick = false;
     interaction.pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY,
-      x: event.clientX, y: event.clientY, moved: false, gain: Math.PI * 1.25 / button.offsetWidth };
+      x: event.clientX, y: event.clientY, moved: false, gain: Math.PI * 1.25 / button.offsetWidth,
+      grabX, grabY, leverage: Math.min(1, Math.hypot(grabX, grabY)), samples: [], time: performance.now() };
     button.setPointerCapture(event.pointerId);
     card.classList.add("is-interacting");
     updateInterface();
@@ -393,12 +491,14 @@ function attachInteraction(card, button) {
     button.classList.add("is-dragging");
     const dx = event.clientX - pointer.x;
     const dy = event.clientY - pointer.y;
-    const length = Math.hypot(dx, dy);
-    if (length) {
-      const halfAngle = length * pointer.gain / 2;
-      const sin = Math.sin(halfAngle) / length;
-      applyOrientation(card, multiplyQuaternion([-dy * sin, dx * sin, 0, Math.cos(halfAngle)], interaction.q));
-    }
+    const vector = [-dy * pointer.gain, dx * pointer.gain,
+      (pointer.grabX * dy - pointer.grabY * dx) * pointer.gain * .9];
+    rotateByVector(card, vector);
+    const now = performance.now();
+    const duration = Math.max(1 / 240, (now - pointer.time) / 1000);
+    pointer.samples.push({ at: now, duration, velocity: vector.map(value => value / duration) });
+    if (pointer.samples.length > 6) pointer.samples.shift();
+    pointer.time = now;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
     event.preventDefault();
@@ -413,8 +513,11 @@ function attachInteraction(card, button) {
     if (!pointer || (event.pointerId !== undefined && pointer.id !== event.pointerId)) return;
     if (event.type !== "pointerup") interaction.suppressClick = true;
     const wasTextVisible = state === STATES.IDLE_OPEN;
+    const velocity = event.type === "pointerup" && pointer.moved && !pointer.scrolling
+      ? releaseVelocity(pointer, performance.now()) : [0, 0, 0];
     releasePointer(card);
     settleFace(card);
+    startInertia(card, velocity);
     if (pointer.moved && interaction.textVisible && !wasTextVisible) announceQuestion(questionById.get(card.dataset.id));
   }
   button.addEventListener("pointerup", endPointer);
@@ -440,8 +543,16 @@ function attachInteraction(card, button) {
 
 // Only the active card needs window-level cleanup, even after many new decks.
 window.addEventListener("blur", () => {
-  if (!activeCard?.interaction.pointer) return;
-  activeCard.interaction.suppressClick = true;
+  if (!activeCard || (!activeCard.interaction.pointer && activeCard.interaction.inertiaFrame === null)) return;
+  if (activeCard.interaction.pointer) activeCard.interaction.suppressClick = true;
+  stopInertia(activeCard);
+  releasePointer(activeCard);
+  settleFace(activeCard);
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden || !activeCard || !readyForInput()) return;
+  if (activeCard.interaction.pointer) activeCard.interaction.suppressClick = true;
+  stopInertia(activeCard);
   releasePointer(activeCard);
   settleFace(activeCard);
 });
@@ -468,6 +579,7 @@ async function flipCard() {
   if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer) return;
   const card = activeCard;
   const interaction = card.interaction;
+  stopInertia(card);
   const reveal = !interaction.textVisible;
   setState(STATES.FLIPPING_OPEN);
   lock(card);
@@ -779,6 +891,7 @@ undoButton.addEventListener("click",()=>{
 });
 function setDrawer(open) {
   if(open&&!readyForInput()) return;
+  if(open && activeCard) { stopInertia(activeCard); settleFace(activeCard); }
   drawerOpen=open; drawer.classList.toggle("is-open",open); drawer.setAttribute("aria-hidden",String(!open)); drawer.inert=!open;
   backdrop.hidden=!open; scene.inert=open;
   menuToggle.setAttribute("aria-expanded",String(open)); menuToggle.setAttribute("aria-label",open?"Fechar perguntas e modos":"Abrir perguntas e modos");
