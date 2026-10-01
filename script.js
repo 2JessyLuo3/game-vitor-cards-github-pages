@@ -117,7 +117,7 @@ let layoutFrame;
 
 function readyForInput() { return state === STATES.IDLE_CLOSED || state === STATES.IDLE_OPEN; }
 function updateInterface() {
-  const ready = readyForInput();
+  const ready = readyForInput() && !activeCard?.interaction?.pointer;
   newGameButton.disabled = !ready;
   skipButton.disabled = !ready;
   motionSelect.disabled = !ready;
@@ -131,15 +131,11 @@ function updateInterface() {
 }
 function updateInstruction() {
   const questionText = activeCard?.querySelector(".card-question");
-  const needsScroll = state === STATES.IDLE_OPEN && questionText && questionText.scrollHeight > questionText.clientHeight + 1;
-  instruction.hidden = !showInstructions && !needsScroll;
-  if (needsScroll) {
-    instruction.textContent = "Deslize na pergunta para ler tudo.";
-  } else if (showInstructions) {
-    instruction.textContent = state === STATES.IDLE_OPEN
-      ? "Toque ou clique de novo para a próxima carta."
-      : "Toque ou clique na carta para revelar.";
-  }
+  const needsScroll = questionText && questionText.scrollHeight > questionText.clientHeight + 1;
+  instruction.hidden = false;
+  instruction.textContent = needsScroll
+    ? "Clique para virar. Arraste para girar. Para ler tudo: roda do mouse ou dois dedos."
+    : "Clique para virar. Arraste para girar. Próximo troca a pergunta.";
 }
 window.addEventListener("resize", () => { if (activeCard) updateInterface(); });
 
@@ -191,9 +187,9 @@ function reportFailure(error) {
   activeCard.classList.remove("is-behind-shoe", "is-in-flight", "can-queue-flip");
   activeCard.style.transform = CENTER;
   activeCard.removeAttribute("aria-hidden");
-  const open = activeCard.querySelector(".card-rotor").classList.contains("is-open");
-  activeCard.querySelector(".card-face--back").setAttribute("aria-hidden", String(open));
-  activeCard.querySelector(".card-face--front").setAttribute("aria-hidden", String(!open));
+  cancelInteraction(activeCard);
+  const open = activeCard.interaction.textVisible;
+  applyOrientation(activeCard, open ? [0, 1, 0, 0] : [0, 0, 0, 1]);
   setState(open ? STATES.IDLE_OPEN : STATES.IDLE_CLOSED);
   unlock(activeCard);
   announcement.textContent = "A carta está pronta. Você pode continuar.";
@@ -217,7 +213,9 @@ function makeCard(question, revealed = false) {
   const button = document.createElement("button");
   button.className = "card-button";
   button.type = "button";
-  button.setAttribute("aria-label", revealed ? "Próxima carta" : "Virar carta");
+  button.setAttribute("aria-label", revealed ? "Virar para o lado em branco" : "Virar para mostrar a pergunta");
+  button.setAttribute("aria-pressed", String(revealed));
+  button.setAttribute("aria-describedby", "game-instruction");
   const rotor = document.createElement("span");
   rotor.className = "card-rotor" + (revealed ? " is-open" : "");
   const back = document.createElement("span");
@@ -233,13 +231,188 @@ function makeCard(question, revealed = false) {
   level.className = "card-level";
   level.textContent = `NÍVEL ${question.level}`;
   front.append(text, level);
+  for (const side of ["left", "right", "top", "bottom"]) {
+    const edge = document.createElement("span");
+    edge.className = `card-edge card-edge--${side}`;
+    edge.setAttribute("aria-hidden", "true");
+    rotor.append(edge);
+  }
   rotor.append(back, front);
   button.append(rotor);
   bob.append(button);
   card.append(bob);
-  button.addEventListener("click", activate);
+  card.interaction = { q: revealed ? [0, 1, 0, 0] : [0, 0, 0, 1], textVisible: revealed,
+    pointer: null, reader: null, suppressClick: false, frame: null, finish: null };
+  attachInteraction(card, button);
+  applyOrientation(card, card.interaction.q);
   return card;
 }
+
+// Quaternions avoid inverted axes and angle jumps after combined horizontal/vertical turns.
+function normalizeQuaternion(q) {
+  const length = Math.hypot(...q);
+  return q.map(value => value / length);
+}
+function multiplyQuaternion(a, b) {
+  const [x, y, z, w] = a;
+  const [u, v, s, t] = b;
+  return normalizeQuaternion([
+    w * u + x * t + y * s - z * v,
+    w * v - x * s + y * t + z * u,
+    w * s + x * v - y * u + z * t,
+    w * t - x * u - y * v - z * s
+  ]);
+}
+function interpolateQuaternion(from, to, amount) {
+  let dot = from.reduce((sum, value, i) => sum + value * to[i], 0);
+  if (dot < 0) { to = to.map(value => -value); dot = -dot; }
+  if (dot > .9995) return normalizeQuaternion(from.map((value, i) => value + (to[i] - value) * amount));
+  const angle = Math.acos(Math.min(1, dot));
+  const a = Math.sin((1 - amount) * angle) / Math.sin(angle);
+  const b = Math.sin(amount * angle) / Math.sin(angle);
+  return from.map((value, i) => value * a + to[i] * b);
+}
+function applyOrientation(card, q) {
+  const interaction = card.interaction;
+  interaction.q = normalizeQuaternion(q);
+  const [x, y, z, w] = interaction.q;
+  // CSS matrices use column-major order. The local blank-face normal is +Z.
+  const matrix = [
+    1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+    2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+    2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+    0, 0, 0, 1
+  ];
+  const normalZ = matrix[10];
+  // At exactly 90 degrees retain the last predominant face, avoiding jitter.
+  if (Math.abs(normalZ) > 1e-6) interaction.textVisible = normalZ < 0;
+  card.querySelector(".card-rotor").style.transform = `matrix3d(${matrix.join(",")})`;
+  card.querySelector(".card-rotor").classList.toggle("is-open", interaction.textVisible);
+  card.querySelector(".card-face--back").setAttribute("aria-hidden", String(interaction.textVisible));
+  card.querySelector(".card-face--front").setAttribute("aria-hidden", String(!interaction.textVisible));
+  const button = card.querySelector("button");
+  button.setAttribute("aria-pressed", String(interaction.textVisible));
+  button.setAttribute("aria-label", interaction.textVisible ? "Virar para o lado em branco" : "Virar para mostrar a pergunta");
+}
+function settleFace(card) {
+  setState(card.interaction.textVisible ? STATES.IDLE_OPEN : STATES.IDLE_CLOSED);
+}
+function releasePointer(card) {
+  const interaction = card.interaction;
+  const pointer = interaction.pointer;
+  const reader = interaction.reader;
+  interaction.pointer = null;
+  interaction.reader = null;
+  const button = card.querySelector("button");
+  button.classList.remove("is-dragging");
+  card.classList.remove("is-interacting");
+  if (reader && button.hasPointerCapture?.(reader.id)) button.releasePointerCapture(reader.id);
+  if (pointer && button.hasPointerCapture?.(pointer.id)) button.releasePointerCapture(pointer.id);
+}
+function cancelInteraction(card) {
+  releasePointer(card);
+  const interaction = card.interaction;
+  cancelAnimationFrame(interaction.frame);
+  interaction.frame = null;
+  if (interaction.finish) { interaction.finish(); interaction.finish = null; }
+}
+function attachInteraction(card, button) {
+  const interaction = card.interaction;
+  button.addEventListener("pointerdown", event => {
+    const text = card.querySelector(".card-question");
+    // One finger rotates. Two fingers scroll only when a question actually overflows.
+    if (card === activeCard && interaction.pointer && !interaction.reader &&
+        event.pointerType === "touch" && interaction.textVisible && text.scrollHeight > text.clientHeight) {
+      interaction.reader = { id: event.pointerId, y: event.clientY };
+      interaction.pointer.scrolling = true;
+      interaction.pointer.moved = true;
+      interaction.suppressClick = true;
+      button.setPointerCapture(event.pointerId);
+      return;
+    }
+    if (card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
+    interaction.suppressClick = false;
+    interaction.pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY,
+      x: event.clientX, y: event.clientY, moved: false, gain: Math.PI * 1.25 / button.offsetWidth };
+    button.setPointerCapture(event.pointerId);
+    card.classList.add("is-interacting");
+    updateInterface();
+  });
+  button.addEventListener("pointermove", event => {
+    const pointer = interaction.pointer;
+    const reader = interaction.reader;
+    if (reader && reader.id === event.pointerId) {
+      card.querySelector(".card-question").scrollTop += (reader.y - event.clientY) / 2;
+      reader.y = event.clientY;
+      event.preventDefault();
+      return;
+    }
+    if (!pointer || pointer.id !== event.pointerId) return;
+    if (pointer.scrolling) {
+      card.querySelector(".card-question").scrollTop += (pointer.y - event.clientY) / (reader ? 2 : 1);
+      pointer.x = event.clientX;
+      pointer.y = event.clientY;
+      event.preventDefault();
+      return;
+    }
+    if (!pointer.moved && Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) < 7) return;
+    pointer.moved = true;
+    interaction.suppressClick = true;
+    button.classList.add("is-dragging");
+    const dx = event.clientX - pointer.x;
+    const dy = event.clientY - pointer.y;
+    const length = Math.hypot(dx, dy);
+    if (length) {
+      const halfAngle = length * pointer.gain / 2;
+      const sin = Math.sin(halfAngle) / length;
+      applyOrientation(card, multiplyQuaternion([-dy * sin, dx * sin, 0, Math.cos(halfAngle)], interaction.q));
+    }
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    event.preventDefault();
+  });
+  function endPointer(event) {
+    const pointer = interaction.pointer;
+    if (interaction.reader?.id === event.pointerId) {
+      interaction.reader = null;
+      if (button.hasPointerCapture?.(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      return;
+    }
+    if (!pointer || (event.pointerId !== undefined && pointer.id !== event.pointerId)) return;
+    if (event.type !== "pointerup") interaction.suppressClick = true;
+    const wasTextVisible = state === STATES.IDLE_OPEN;
+    releasePointer(card);
+    settleFace(card);
+    if (pointer.moved && interaction.textVisible && !wasTextVisible) announceQuestion(questionById.get(card.dataset.id));
+  }
+  button.addEventListener("pointerup", endPointer);
+  button.addEventListener("pointercancel", endPointer);
+  button.addEventListener("lostpointercapture", endPointer);
+  button.addEventListener("click", event => {
+    // A browser-generated click after dragging must never trigger a flip.
+    if (interaction.suppressClick && event.detail !== 0) {
+      interaction.suppressClick = false;
+      event.preventDefault();
+      return;
+    }
+    if (card === activeCard) void activate();
+  });
+  // Keep long questions readable without taking a touch drag away from rotation.
+  button.addEventListener("wheel", event => {
+    const text = card.querySelector(".card-question");
+    if (!readyForInput() || !interaction.textVisible || text.scrollHeight <= text.clientHeight) return;
+    text.scrollTop += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? text.clientHeight : 1);
+    event.preventDefault();
+  }, { passive: false });
+}
+
+// Only the active card needs window-level cleanup, even after many new decks.
+window.addEventListener("blur", () => {
+  if (!activeCard?.interaction.pointer) return;
+  activeCard.interaction.suppressClick = true;
+  releasePointer(activeCard);
+  settleFace(activeCard);
+});
 
 function unlock(card) {
   const button = card.querySelector("button");
@@ -259,35 +432,37 @@ function announceQuestion(question) {
   announcement.textContent = `Nível ${question.level}. ${question.text}`;
 }
 
-function awaitTransform(element, timeout) {
-  return new Promise(resolve => {
-    let settled = false;
-    function finish() {
-      if (settled) return;
-      settled = true;
-      element.removeEventListener("transitionend", onEnd);
-      clearTimeout(timer);
-      resolve();
-    }
-    function onEnd(event) { if (event.target === element && event.propertyName === "transform") finish(); }
-    const timer = setTimeout(finish, timeout);
-    element.addEventListener("transitionend", onEnd);
-  });
-}
-
-async function flipOpen() {
+async function flipCard() {
+  if (!readyForInput() || activeCard.interaction.pointer) return;
+  const card = activeCard;
+  const interaction = card.interaction;
+  const reveal = !interaction.textVisible;
   setState(STATES.FLIPPING_OPEN);
-  lock(activeCard);
-  const rotor = activeCard.querySelector(".card-rotor");
-  const finished = minimalMotion() ? Promise.resolve() : awaitTransform(rotor, motionDuration(820, 480));
-  rotor.classList.add("is-open");
-  await finished;
-  activeCard.querySelector(".card-face--back").setAttribute("aria-hidden", "true");
-  activeCard.querySelector(".card-face--front").setAttribute("aria-hidden", "false");
-  activeCard.querySelector("button").setAttribute("aria-label", "Próxima carta");
-  announceQuestion(currentQuestion());
-  setState(STATES.IDLE_OPEN);
-  unlock(activeCard);
+  lock(card);
+  const from = [...interaction.q];
+  // Canonical orientations ensure that the text is upright after EVERY click.
+  const to = reveal ? [0, 1, 0, 0] : [0, 0, 0, 1];
+  const duration = motionDuration(720, 380);
+  if (duration) {
+    await new Promise(resolve => {
+      interaction.finish = resolve;
+      let start;
+      function frame(now) {
+        start ??= now;
+        const progress = Math.min(1, (now - start) / duration);
+        const eased = 1 - (1 - progress) ** 3;
+        applyOrientation(card, interpolateQuaternion(from, to, eased));
+        if (progress < 1) interaction.frame = requestAnimationFrame(frame);
+        else { interaction.frame = null; interaction.finish = null; resolve(); }
+      }
+      interaction.frame = requestAnimationFrame(frame);
+    });
+  }
+  applyOrientation(card, to);
+  if (reveal) announceQuestion(currentQuestion());
+  else announcement.textContent = "Lado em branco. Clique para mostrar a mesma pergunta.";
+  settleFace(card);
+  unlock(card);
 }
 
 function flightPose(screenX, screenY, depth, scale, tilt, turn = 0) {
@@ -362,11 +537,12 @@ async function arriveFromShoe(card, travelX, travelY, pose, outside) {
 }
 
 async function dealNext(restart = false) {
-  if (!readyForInput()) return;
+  if (!readyForInput() || activeCard.interaction.pointer) return;
   finishInstructions();
   setState(STATES.RETURNING_TO_SHOE);
   pendingFlip = false;
   const outgoing = activeCard;
+  cancelInteraction(outgoing);
   const hadFocus = outgoing.contains(document.activeElement);
   lock(outgoing);
   if (hadFocus) document.activeElement.blur();
@@ -426,13 +602,12 @@ async function dealNext(restart = false) {
   if (hadFocus) incoming.querySelector("button").focus({ preventScroll: true });
   if (pendingFlip) {
     pendingFlip = false;
-    void runAction(flipOpen);
+    void runAction(flipCard);
   }
 }
 
 function activate() {
-  if (state === STATES.IDLE_CLOSED) return runAction(flipOpen);
-  if (state === STATES.IDLE_OPEN) return runAction(() => dealNext());
+  if (readyForInput()) return runAction(flipCard);
   if (state === STATES.DEALING_NEXT && activeCard?.classList.contains("can-queue-flip")) {
     pendingFlip = true;
     return Promise.resolve(true);
@@ -457,9 +632,9 @@ function registerBrowserTools() {
   const context = document.modelContext;
   if (!context?.registerTool) return;
   const inputSchema = { type: "object", properties: {}, additionalProperties: false };
-  for (const [name, title, expected, description] of [
-    ["reveal_question", "Virar carta", STATES.IDLE_CLOSED, "Vira a carta fechada e mostra a pergunta atual."],
-    ["advance_card", "Próxima carta", STATES.IDLE_OPEN, "Devolve a carta aberta e distribui a próxima carta fechada."]
+  for (const [name, title, description] of [
+    ["reveal_question", "Virar carta", "Vira a carta fechada e mostra a pergunta atual."],
+    ["advance_card", "Próxima carta", "Devolve a carta atual e distribui a próxima carta fechada."]
   ]) {
     try {
       Promise.resolve(context.registerTool({
@@ -469,8 +644,12 @@ function registerBrowserTools() {
           if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) {
             throw new Error("Esta ação não recebe parâmetros.");
           }
-          if (state !== expected) throw new Error("A carta ainda não está pronta para esta ação.");
-          await activate();
+          if (!readyForInput() || activeCard.interaction.pointer ||
+              (name === "reveal_question" && activeCard.interaction.textVisible)) {
+            throw new Error("A carta ainda não está pronta para esta ação.");
+          }
+          if (name === "advance_card") await runAction(() => dealNext());
+          else await runAction(flipCard);
           const question = currentQuestion();
           return { id: question.id, level: question.level,
             ...(name === "reveal_question" ? { question: question.text } : { closed: true }) };
@@ -497,7 +676,7 @@ void arriveFromShoe(activeCard, travelX, travelY, pose, outside).then(() => {
   unlock(activeCard);
   if (pendingFlip) {
     pendingFlip = false;
-    void runAction(flipOpen);
+    void runAction(flipCard);
   }
 }).catch(reportFailure);
 registerBrowserTools();

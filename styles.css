@@ -86,6 +86,7 @@ body { overscroll-behavior: none; }
 .card-bob {
   width: 100%;
   height: 100%;
+  transform-style: preserve-3d;
 }
 
 .card.is-resting .card-bob { animation: breathe 5.7s ease-in-out infinite; }
@@ -103,13 +104,19 @@ body { overscroll-behavior: none; }
   border: 0;
   border-radius: 8px;
   background: transparent;
-  cursor: pointer;
-  touch-action: manipulation;
+  position: relative;
+  cursor: grab;
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
   perspective: 1150px;
+  transform-style: preserve-3d;
 }
+
+.card-button.is-dragging { cursor: grabbing; }
+.card.is-interacting .card-bob { animation: none; }
+.card-button[aria-disabled="true"] { cursor: default; }
 
 .card-button:focus { outline: none; }
 .card-button:focus-visible { outline: 2px solid #e7e4da; outline-offset: 7px; }
@@ -121,11 +128,27 @@ body { overscroll-behavior: none; }
   height: 100%;
   transform-style: preserve-3d;
   transform: rotateY(0deg);
-  transition: transform var(--flip-duration) cubic-bezier(.22, .69, .18, 1);
   border-radius: 8px;
+  pointer-events: none;
 }
 
 .card-rotor.is-open { transform: rotateY(180deg); }
+
+/* Duas faces separadas por 3px e lâminas internas dão espessura real ao giro.
+   A área do botão continua fixa: uma carta de lado ainda pode receber um clique. */
+.card-face--back { transform: translateZ(1.5px); }
+.card-edge {
+  position: absolute;
+  background: linear-gradient(90deg, var(--accent), var(--paper), var(--accent));
+  backface-visibility: visible;
+  pointer-events: none;
+}
+.card-edge--left, .card-edge--right { width: 3px; height: calc(100% - 12px); top: 6px; transform: rotateY(90deg); }
+.card-edge--left { left: -1.5px; }
+.card-edge--right { right: -1.5px; }
+.card-edge--top, .card-edge--bottom { height: 3px; width: calc(100% - 12px); left: 6px; transform: rotateX(90deg); }
+.card-edge--top { top: -1.5px; }
+.card-edge--bottom { bottom: -1.5px; }
 
 .card-face {
   position: absolute;
@@ -155,7 +178,7 @@ body { overscroll-behavior: none; }
 }
 
 .card-face--front {
-  transform: rotateY(180deg);
+  transform: rotateY(180deg) translateZ(1.5px);
   color: var(--ink);
   padding-bottom: clamp(60px, 10vw, 78px);
 }
