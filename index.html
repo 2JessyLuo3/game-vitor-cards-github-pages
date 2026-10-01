@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex,nofollow">
+    <meta name="theme-color" content="#1d1c1a">
+    <meta name="description" content="Um baralho de perguntas para uma conversa presencial.">
+    <title>Game Vitor Cards</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='13' fill='%231d1c1a'/%3E%3Crect x='15' y='9' width='34' height='46' rx='3' fill='%23f7f5ef' stroke='%23a8bea0' stroke-width='3'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./script.js" defer></script>
+  </head>
+  <body>
+    <main class="scene" id="scene" aria-label="Baralho de perguntas">
+      <div class="scene-light" aria-hidden="true"></div>
+      <div class="floor-shadow" aria-hidden="true"></div>
+      <div class="card-layer" id="card-layer"></div>
+
+      <div class="shoe" id="shoe" aria-hidden="true">
+        <div class="shoe-shadow"></div>
+        <div class="shoe-housing"></div>
+        <div class="shoe-interior"></div>
+        <div class="shoe-deck" id="shoe-deck">
+          <div class="shoe-card shoe-card--one"></div>
+          <div class="shoe-card shoe-card--two"></div>
+          <div class="shoe-card shoe-card--three"></div>
+          <div class="shoe-card shoe-card--four"></div>
+        </div>
+        <div class="shoe-front"></div>
+        <div class="shoe-edge"></div>
+      </div>
+      <span class="credit">Sarah</span>
+      <div class="visually-hidden" id="announcement" aria-live="polite" aria-atomic="true"></div>
+    </main>
+  </body>
+</html>
