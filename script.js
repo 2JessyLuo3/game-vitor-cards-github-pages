@@ -1,6 +1,6 @@
 /* Para trocar uma pergunta, altere apenas o texto entre aspas abaixo.
    Mantenha o id e o nível: eles preservam a sequência e a cor da carta. */
-const QUESTIONS = [
+const DEFAULT_QUESTIONS = [
   { id: "green-01", level: 1, text: "Qual coisa pequena consegue melhorar seu dia quase sempre?" },
   { id: "green-02", level: 1, text: "Qual viagem você faria amanhã se pudesse?" },
   { id: "green-03", level: 1, text: "Que tipo de coisa você nunca enjoa de fazer?" },
@@ -43,6 +43,7 @@ const STATES = Object.freeze({
   DEALING_NEXT: "DEALING_NEXT"
 });
 
+let QUESTIONS = loadQuestions();
 const questionById = new Map(QUESTIONS.map(question => [question.id, question]));
 const layer = document.getElementById("card-layer");
 const scene = document.getElementById("scene");
@@ -55,15 +56,43 @@ const newGameButton = document.getElementById("new-game");
 const cardCount = document.getElementById("card-count");
 const deckCount = document.getElementById("deck-count");
 const instruction = document.getElementById("game-instruction");
+const menuToggle = document.getElementById("menu-toggle");
+const drawer = document.getElementById("question-drawer");
+const backdrop = document.getElementById("drawer-backdrop");
+const emptyState = document.getElementById("empty-state");
+let drawerOpen = false;
 
-// Only device preferences are stored. Every visit starts a fresh shuffled game.
+// Questions and preferences are local to this browser. Each visit shuffles a fresh game.
 function readPreference(key, fallback) {
   try { return localStorage.getItem(`vitor-cards:${key}`) ?? fallback; }
   catch { return fallback; }
 }
 function writePreference(key, value) {
-  try { localStorage.setItem(`vitor-cards:${key}`, value); }
-  catch { /* The game also works when browser storage is unavailable. */ }
+  try { localStorage.setItem(`vitor-cards:${key}`, value); return true; }
+  catch { return false; }
+}
+function validateQuestions(value) {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set();
+  const questions = [];
+  for (const question of value) {
+    if (!question || typeof question.id !== "string" || !question.id || seen.has(question.id) ||
+        typeof question.text !== "string" || !question.text.trim() || question.text.length > 1000 ||
+        ![1, 2, 3].includes(question.level)) return null;
+    seen.add(question.id);
+    questions.push({ id: question.id, text: question.text.trim(), level: question.level });
+  }
+  return questions;
+}
+function loadQuestions() {
+  try {
+    const saved = readPreference("questions-v2", null);
+    if (saved !== null) {
+      const valid = validateQuestions(JSON.parse(saved));
+      if (valid) return valid;
+    }
+  } catch { /* A malformed save never prevents opening the original game. */ }
+  return DEFAULT_QUESTIONS.map(question => ({ ...question }));
 }
 let motionMode = readPreference("motion", "normal");
 if (!["normal", "fast", "reduced"].includes(motionMode)) motionMode = "normal";
@@ -118,10 +147,12 @@ let layoutFrame;
 function readyForInput() { return state === STATES.IDLE_CLOSED || state === STATES.IDLE_OPEN; }
 function updateInterface() {
   const ready = readyForInput() && !activeCard?.interaction?.pointer;
-  newGameButton.disabled = !ready;
-  skipButton.disabled = !ready;
-  motionSelect.disabled = !ready;
-  const countText = `Carta ${session.index + 1} de ${session.order.length}`;
+  newGameButton.disabled = !ready || drawerOpen || !activeCard;
+  skipButton.disabled = !ready || drawerOpen || !activeCard;
+  motionSelect.disabled = !ready || drawerOpen;
+  menuToggle.disabled = !ready;
+  emptyState.hidden = Boolean(activeCard);
+  const countText = session.order.length ? `Carta ${session.index + 1} de ${session.order.length}` : "Sem perguntas";
   const blockText = `Baralho ${session.block}`;
   if (cardCount.textContent !== countText) cardCount.textContent = countText;
   if (deckCount.textContent !== blockText) deckCount.textContent = blockText;
@@ -132,7 +163,7 @@ function updateInterface() {
 function updateInstruction() {
   const questionText = activeCard?.querySelector(".card-question");
   const needsScroll = questionText && questionText.scrollHeight > questionText.clientHeight + 1;
-  instruction.hidden = false;
+  instruction.hidden = !activeCard;
   instruction.textContent = needsScroll
     ? "Clique para virar. Arraste para girar. Para ler tudo: roda do mouse ou dois dedos."
     : "Clique para virar. Arraste para girar. Próximo troca a pergunta.";
@@ -183,6 +214,7 @@ function reportFailure(error) {
   console.error("Não foi possível concluir a troca de carta.", error);
   pendingFlip = false;
   for (const card of [...layer.children]) if (card !== activeCard) card.remove();
+  if (!activeCard) { setState(STATES.IDLE_CLOSED); return; }
   activeCard.getAnimations().forEach(animation => animation.cancel());
   activeCard.classList.remove("is-behind-shoe", "is-in-flight", "can-queue-flip");
   activeCard.style.transform = CENTER;
@@ -330,7 +362,7 @@ function attachInteraction(card, button) {
       button.setPointerCapture(event.pointerId);
       return;
     }
-    if (card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
+    if (drawerOpen || card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
     interaction.suppressClick = false;
     interaction.pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY,
       x: event.clientX, y: event.clientY, moved: false, gain: Math.PI * 1.25 / button.offsetWidth };
@@ -433,7 +465,7 @@ function announceQuestion(question) {
 }
 
 async function flipCard() {
-  if (!readyForInput() || activeCard.interaction.pointer) return;
+  if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer) return;
   const card = activeCard;
   const interaction = card.interaction;
   const reveal = !interaction.textVisible;
@@ -537,7 +569,7 @@ async function arriveFromShoe(card, travelX, travelY, pose, outside) {
 }
 
 async function dealNext(restart = false) {
-  if (!readyForInput() || activeCard.interaction.pointer) return;
+  if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer) return;
   finishInstructions();
   setState(STATES.RETURNING_TO_SHOE);
   pendingFlip = false;
@@ -607,6 +639,7 @@ async function dealNext(restart = false) {
 }
 
 function activate() {
+  if (drawerOpen || !activeCard) return Promise.resolve(false);
   if (readyForInput()) return runAction(flipCard);
   if (state === STATES.DEALING_NEXT && activeCard?.classList.contains("can-queue-flip")) {
     pendingFlip = true;
@@ -644,7 +677,7 @@ function registerBrowserTools() {
           if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) {
             throw new Error("Esta ação não recebe parâmetros.");
           }
-          if (!readyForInput() || activeCard.interaction.pointer ||
+          if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer ||
               (name === "reveal_question" && activeCard.interaction.textVisible)) {
             throw new Error("A carta ainda não está pronta para esta ação.");
           }
@@ -659,24 +692,110 @@ function registerBrowserTools() {
   }
 }
 
-activeCard = makeCard(currentQuestion());
-layer.append(activeCard);
-const { travelX, travelY, pose } = shoeTransform();
-const outside = offscreenPath(activeCard);
-activeCard.style.transform = pose;
-activeCard.classList.add("is-behind-shoe", "is-in-flight");
-activeCard.setAttribute("aria-hidden", "true");
-lock(activeCard);
-setState(STATES.DEALING_NEXT);
-void arriveFromShoe(activeCard, travelX, travelY, pose, outside).then(() => {
-  activeCard.classList.remove("is-behind-shoe", "is-in-flight");
-  activeCard.style.transform = CENTER;
-  activeCard.removeAttribute("aria-hidden");
-  setState(STATES.IDLE_CLOSED);
-  unlock(activeCard);
-  if (pendingFlip) {
-    pendingFlip = false;
-    void runAction(flipCard);
+function resetBoard(animate=false) {
+  if(activeCard) { cancelInteraction(activeCard); activeCard.getAnimations().forEach(animation=>animation.cancel()); activeCard.remove(); }
+  activeCard=null; pendingFlip=false;
+  session={order:shuffledIds(true),index:0,block:1};
+  scene.style.removeProperty("--card-width"); scene.style.removeProperty("--card-top"); scene.style.removeProperty("height");
+  document.documentElement.classList.remove("needs-scroll");
+  announcement.textContent="";
+  if(!QUESTIONS.length) { setState(STATES.IDLE_CLOSED); return; }
+  activeCard=makeCard(currentQuestion()); layer.append(activeCard);
+  if(!animate) { activeCard.style.transform=CENTER; unlock(activeCard); setState(STATES.IDLE_CLOSED); return; }
+  const card=activeCard, {travelX,travelY,pose}=shoeTransform(), outside=offscreenPath(card);
+  card.style.transform=pose; card.classList.add("is-behind-shoe","is-in-flight"); card.setAttribute("aria-hidden","true"); lock(card);
+  setState(STATES.DEALING_NEXT);
+  void arriveFromShoe(card,travelX,travelY,pose,outside).then(()=>{
+    card.classList.remove("is-behind-shoe","is-in-flight"); card.style.transform=CENTER; card.removeAttribute("aria-hidden");
+    setState(STATES.IDLE_CLOSED); unlock(card);
+    if(pendingFlip) { pendingFlip=false; void runAction(flipCard); }
+  }).catch(reportFailure);
+}
+
+const questionList=document.getElementById("question-list");
+const questionTotal=document.getElementById("question-total");
+const questionForm=document.getElementById("question-form");
+const questionTextInput=document.getElementById("question-text");
+const questionLevelInput=document.getElementById("question-level");
+const feedback=document.getElementById("editor-feedback");
+const undoButton=document.getElementById("undo-edit");
+let editQuestionId=null;
+const questionUndo=[];
+function renderQuestionList() {
+  questionList.replaceChildren(); questionTotal.textContent=String(QUESTIONS.length); undoButton.hidden=!questionUndo.length;
+  if(!QUESTIONS.length) {
+    const message=document.createElement("p"); message.className="empty-list"; message.textContent="Nenhuma pergunta. Adicione uma para começar."; questionList.append(message); return;
   }
-}).catch(reportFailure);
+  for(const [index, question] of QUESTIONS.entries()) {
+    const item=document.createElement("article"); item.className="question-item"; item.dataset.level=String(question.level); item.dataset.id=question.id;
+    const meta=document.createElement("span"); meta.className="question-meta"; meta.textContent=`PERGUNTA ${index + 1} · NÍVEL ${question.level}`;
+    const text=document.createElement("p"); text.textContent=question.text;
+    const actions=document.createElement("div"); actions.className="question-item-actions";
+    const edit=document.createElement("button"); edit.type="button"; edit.className="quiet-button"; edit.textContent="Editar";
+    edit.setAttribute("aria-label",`Editar pergunta ${index + 1}, nível ${question.level}`); edit.addEventListener("click",()=>openQuestionForm(question));
+    const remove=document.createElement("button"); remove.type="button"; remove.className="quiet-button delete-button"; remove.textContent="Apagar";
+    remove.setAttribute("aria-label",`Apagar pergunta ${index + 1}, nível ${question.level}`);
+    remove.addEventListener("click",()=>{
+      if(!readyForInput()) return;
+      if(editQuestionId===question.id) closeQuestionForm();
+      commitQuestions(QUESTIONS.filter(item=>item.id!==question.id),"Pergunta apagada. Você pode desfazer abaixo.");
+      undoButton.focus();
+    });
+    actions.append(edit,remove); item.append(meta,text,actions); questionList.append(item);
+  }
+}
+function openQuestionForm(question=null) {
+  editQuestionId=question?.id??null;
+  document.getElementById("form-title").textContent=question?"Editar pergunta":"Nova pergunta";
+  questionTextInput.value=question?.text??""; questionLevelInput.value=String(question?.level??1);
+  questionForm.hidden=false; feedback.textContent="";
+  questionForm.scrollIntoView({block:"nearest",behavior:minimalMotion()?"instant":"smooth"});
+  questionTextInput.focus({preventScroll:true});
+}
+function closeQuestionForm() { questionForm.hidden=true; editQuestionId=null; }
+function commitQuestions(next,message,remember=true) {
+  const validated=validateQuestions(next);
+  if(!validated) { feedback.textContent="Confira o texto e o nível da pergunta."; return false; }
+  if(remember) { questionUndo.push(QUESTIONS.map(question=>({...question}))); if(questionUndo.length>10) questionUndo.shift(); }
+  QUESTIONS=validated; questionById.clear(); for(const question of QUESTIONS) questionById.set(question.id,question);
+  const saved=writePreference("questions-v2",JSON.stringify(QUESTIONS));
+  resetBoard(); renderQuestionList();
+  feedback.textContent=saved?message:`${message} O navegador não permitiu salvar; as alterações valem somente nesta sessão.`;
+  return true;
+}
+questionForm.addEventListener("submit",event=>{
+  event.preventDefault(); if(!readyForInput()) return;
+  const text=questionTextInput.value.trim(), level=Number(questionLevelInput.value);
+  if(!text||text.length>1000||![1,2,3].includes(level)) { feedback.textContent="Escreva uma pergunta e escolha um nível válido."; return; }
+  const id=editQuestionId??`custom-${window.crypto?.randomUUID?.()??`${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+  const question={id,text,level}, next=editQuestionId?QUESTIONS.map(item=>item.id===id?question:item):[...QUESTIONS,question];
+  if(commitQuestions(next,"Pergunta salva. O baralho foi atualizado.")) { closeQuestionForm(); document.getElementById("add-question").focus(); }
+});
+document.getElementById("add-question").addEventListener("click",()=>openQuestionForm());
+document.getElementById("cancel-edit").addEventListener("click",()=>{ closeQuestionForm(); document.getElementById("add-question").focus(); });
+undoButton.addEventListener("click",()=>{
+  if(!readyForInput()||!questionUndo.length) return;
+  closeQuestionForm(); commitQuestions(questionUndo.pop(),"Alteração desfeita.",false); document.getElementById("add-question").focus();
+});
+function setDrawer(open) {
+  if(open&&!readyForInput()) return;
+  drawerOpen=open; drawer.classList.toggle("is-open",open); drawer.setAttribute("aria-hidden",String(!open)); drawer.inert=!open;
+  backdrop.hidden=!open; scene.inert=open;
+  menuToggle.setAttribute("aria-expanded",String(open)); menuToggle.setAttribute("aria-label",open?"Fechar perguntas e modos":"Abrir perguntas e modos");
+  if(open) { renderQuestionList(); document.getElementById("add-question").focus({preventScroll:true}); }
+  else menuToggle.focus({preventScroll:true});
+  updateInterface();
+}
+menuToggle.addEventListener("click",()=>setDrawer(!drawerOpen)); backdrop.addEventListener("click",()=>setDrawer(false));
+document.addEventListener("keydown",event=>{
+  if(!drawerOpen) return;
+  if(event.key==="Escape") { event.preventDefault(); setDrawer(false); }
+  if(event.key==="Tab") {
+    const controls=[menuToggle,...drawer.querySelectorAll('button:not([hidden]),select,textarea,input')].filter(element=>!element.disabled&&element.getClientRects().length);
+    const index=controls.indexOf(document.activeElement), next=event.shiftKey?(index<=0?controls.length-1:index-1):(index+1)%controls.length;
+    event.preventDefault(); controls[next]?.focus();
+  }
+});
+renderQuestionList();
+resetBoard(true);
 registerBrowserTools();

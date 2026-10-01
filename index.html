@@ -12,9 +12,34 @@
     <script src="./script.js" defer></script>
   </head>
   <body>
+    <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Abrir perguntas e modos" aria-expanded="false" aria-controls="question-drawer">
+      <span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span>
+    </button>
+    <button class="drawer-backdrop" id="drawer-backdrop" type="button" aria-label="Fechar painel" hidden tabindex="-1"></button>
+    <aside class="question-drawer" id="question-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" inert>
+      <div class="drawer-heading"><h1 id="drawer-title">Seu baralho</h1><p>Personalize suas perguntas.</p></div>
+      <section class="mode-section" aria-labelledby="mode-title">
+        <h2 id="mode-title">Modos de jogo</h2>
+        <div class="mode-option"><span>Baralho aleatório</span><span class="mode-tag">Ativo</span></div>
+        <div class="mode-option mode-option--soon"><span>Dado de 10 lados</span><span class="mode-tag">Em breve</span></div>
+      </section>
+      <div class="editor-heading"><h2>Perguntas <span id="question-total">30</span></h2><button class="quiet-button" id="add-question" type="button">Adicionar</button></div>
+      <p class="drawer-note">As alterações ficam salvas somente neste navegador.</p>
+      <form class="question-form" id="question-form" hidden>
+        <h3 id="form-title">Nova pergunta</h3>
+        <label for="question-text">Pergunta</label>
+        <textarea id="question-text" rows="4" maxlength="1000" required placeholder="Escreva sua pergunta…"></textarea>
+        <label class="level-field" for="question-level">Nível<select id="question-level"><option value="1">1 · Verde</option><option value="2">2 · Amarelo</option><option value="3">3 · Vermelho</option></select></label>
+        <div class="form-actions"><button class="quiet-button primary-button" type="submit">Salvar pergunta</button><button class="quiet-button" id="cancel-edit" type="button">Cancelar</button></div>
+      </form>
+      <p class="editor-feedback" id="editor-feedback" role="status" aria-live="polite"></p>
+      <button class="undo-button" id="undo-edit" type="button" hidden>Desfazer última alteração</button>
+      <div class="question-list" id="question-list"></div>
+    </aside>
     <main class="scene" id="scene" aria-label="Baralho de perguntas">
       <div class="scene-light" aria-hidden="true"></div>
       <div class="floor-shadow" aria-hidden="true"></div>
+      <div class="empty-state" id="empty-state" hidden>Seu baralho está vazio.<br>Abra o menu e adicione uma pergunta.</div>
       <div class="card-layer" id="card-layer"></div>
       <header class="game-toolbar">
         <div class="game-progress" role="status" aria-live="polite" aria-atomic="true">
