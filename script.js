@@ -49,6 +49,43 @@ const scene = document.getElementById("scene");
 const shoeDeck = document.getElementById("shoe-deck");
 const announcement = document.getElementById("announcement");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const motionSelect = document.getElementById("motion-mode");
+const skipButton = document.getElementById("skip-card");
+const newGameButton = document.getElementById("new-game");
+const cardCount = document.getElementById("card-count");
+const deckCount = document.getElementById("deck-count");
+const instruction = document.getElementById("game-instruction");
+
+// Only device preferences are stored. Every visit starts a fresh shuffled game.
+function readPreference(key, fallback) {
+  try { return localStorage.getItem(`vitor-cards:${key}`) ?? fallback; }
+  catch { return fallback; }
+}
+function writePreference(key, value) {
+  try { localStorage.setItem(`vitor-cards:${key}`, value); }
+  catch { /* The game also works when browser storage is unavailable. */ }
+}
+let motionMode = readPreference("motion", "normal");
+if (!["normal", "fast", "reduced"].includes(motionMode)) motionMode = "normal";
+let showInstructions = readPreference("instructions-seen", "false") !== "true";
+
+function minimalMotion() { return reducedMotion.matches || motionMode === "reduced"; }
+function motionDuration(normal, fast) { return minimalMotion() ? 0 : motionMode === "fast" ? fast : normal; }
+function updateMotion() {
+  scene.classList.toggle("motion-reduced", minimalMotion());
+  scene.style.setProperty("--flip-duration", minimalMotion() ? "0s" : motionMode === "fast" ? ".38s" : ".72s");
+  motionSelect.value = minimalMotion() ? "reduced" : motionMode;
+  // Always respect the operating system's reduced-motion preference.
+  motionSelect.querySelector('[value="normal"]').disabled = reducedMotion.matches;
+  motionSelect.querySelector('[value="fast"]').disabled = reducedMotion.matches;
+}
+motionSelect.addEventListener("change", () => {
+  motionMode = motionSelect.value;
+  writePreference("motion", motionMode);
+  updateMotion();
+});
+reducedMotion.addEventListener?.("change", updateMotion);
+updateMotion();
 
 function randomInteger(maxInclusive) {
   if (!window.crypto?.getRandomValues) return Math.floor(Math.random() * (maxInclusive + 1));
@@ -72,10 +109,99 @@ function shuffledIds(firstTwoGreen = false) {
 }
 
 // A new page visit starts with two different green cards. Later blocks are fully random.
-let session = { order: shuffledIds(true), index: 0 };
+let session = { order: shuffledIds(true), index: 0, block: 1 };
 let state = STATES.IDLE_CLOSED;
 let activeCard;
 let pendingFlip = false;
+let layoutFrame;
+
+function readyForInput() { return state === STATES.IDLE_CLOSED || state === STATES.IDLE_OPEN; }
+function updateInterface() {
+  const ready = readyForInput();
+  newGameButton.disabled = !ready;
+  skipButton.disabled = !ready;
+  motionSelect.disabled = !ready;
+  const countText = `Carta ${session.index + 1} de ${session.order.length}`;
+  const blockText = `Baralho ${session.block}`;
+  if (cardCount.textContent !== countText) cardCount.textContent = countText;
+  if (deckCount.textContent !== blockText) deckCount.textContent = blockText;
+  updateInstruction();
+  cancelAnimationFrame(layoutFrame);
+  if (ready) layoutFrame = requestAnimationFrame(fitLayout);
+}
+function updateInstruction() {
+  const questionText = activeCard?.querySelector(".card-question");
+  const needsScroll = state === STATES.IDLE_OPEN && questionText && questionText.scrollHeight > questionText.clientHeight + 1;
+  instruction.hidden = !showInstructions && !needsScroll;
+  if (needsScroll) {
+    instruction.textContent = "Deslize na pergunta para ler tudo.";
+  } else if (showInstructions) {
+    instruction.textContent = state === STATES.IDLE_OPEN
+      ? "Toque ou clique de novo para a próxima carta."
+      : "Toque ou clique na carta para revelar.";
+  }
+}
+window.addEventListener("resize", () => { if (activeCard) updateInterface(); });
+
+// Reserve room for controls when text is enlarged or the screen is very short.
+// On unusually small screens with large text, scrolling keeps every control usable.
+function fitLayout() {
+  if (!activeCard || !readyForInput()) return;
+  const previousScroll = window.scrollY;
+  scene.style.removeProperty("--card-width");
+  scene.style.removeProperty("--card-top");
+  scene.style.removeProperty("height");
+  document.documentElement.classList.remove("needs-scroll");
+  updateInstruction();
+  const toolbar = document.querySelector(".game-toolbar");
+  const actions = document.querySelector(".card-actions");
+  const sceneBounds = scene.getBoundingClientRect();
+  const upper = toolbar.getBoundingClientRect().bottom - sceneBounds.top + 12;
+  const originalWidth = activeCard.getBoundingClientRect().width;
+  const sidebar = window.matchMedia("(max-height: 540px) and (orientation: landscape)").matches;
+  for (let pass = 0; pass < 2; pass++) {
+    let lower = sidebar ? scene.clientHeight - 40 : actions.getBoundingClientRect().top - sceneBounds.top - 16;
+    const minimumHeight = Math.min(originalWidth * 1.4, 220);
+    if (lower - upper < minimumHeight) {
+      scene.style.height = `${scene.clientHeight + minimumHeight - (lower - upper)}px`;
+      document.documentElement.classList.add("needs-scroll");
+      lower = sidebar ? scene.clientHeight - 40 : actions.getBoundingClientRect().top - sceneBounds.top - 16;
+    }
+    const bounds = activeCard.getBoundingClientRect();
+    const top = bounds.top - sceneBounds.top;
+    const bottom = bounds.bottom - sceneBounds.top;
+    if (top < upper || bottom > lower) {
+      scene.style.setProperty("--card-width", `${Math.min(originalWidth, (lower - upper) / 1.4)}px`);
+      scene.style.setProperty("--card-top", `${(upper + lower) / 2}px`);
+    }
+    updateInstruction();
+  }
+  if (previousScroll && document.documentElement.classList.contains("needs-scroll")) window.scrollTo(0, previousScroll);
+}
+function setState(next) { state = next; updateInterface(); }
+function finishInstructions() {
+  showInstructions = false;
+  writePreference("instructions-seen", "true");
+}
+function reportFailure(error) {
+  console.error("Não foi possível concluir a troca de carta.", error);
+  pendingFlip = false;
+  for (const card of [...layer.children]) if (card !== activeCard) card.remove();
+  activeCard.getAnimations().forEach(animation => animation.cancel());
+  activeCard.classList.remove("is-behind-shoe", "is-in-flight", "can-queue-flip");
+  activeCard.style.transform = CENTER;
+  activeCard.removeAttribute("aria-hidden");
+  const open = activeCard.querySelector(".card-rotor").classList.contains("is-open");
+  activeCard.querySelector(".card-face--back").setAttribute("aria-hidden", String(open));
+  activeCard.querySelector(".card-face--front").setAttribute("aria-hidden", String(!open));
+  setState(open ? STATES.IDLE_OPEN : STATES.IDLE_CLOSED);
+  unlock(activeCard);
+  announcement.textContent = "A carta está pronta. Você pode continuar.";
+}
+function runAction(action) {
+  try { return Promise.resolve(action()).catch(reportFailure); }
+  catch (error) { reportFailure(error); return Promise.resolve(); }
+}
 
 function currentQuestion() { return questionById.get(session.order[session.index]); }
 function pause(milliseconds) { return new Promise(resolve => setTimeout(resolve, milliseconds)); }
@@ -150,17 +276,17 @@ function awaitTransform(element, timeout) {
 }
 
 async function flipOpen() {
-  state = STATES.FLIPPING_OPEN;
+  setState(STATES.FLIPPING_OPEN);
   lock(activeCard);
   const rotor = activeCard.querySelector(".card-rotor");
-  const finished = awaitTransform(rotor, reducedMotion.matches ? 100 : 820);
+  const finished = minimalMotion() ? Promise.resolve() : awaitTransform(rotor, motionDuration(820, 480));
   rotor.classList.add("is-open");
   await finished;
   activeCard.querySelector(".card-face--back").setAttribute("aria-hidden", "true");
   activeCard.querySelector(".card-face--front").setAttribute("aria-hidden", "false");
   activeCard.querySelector("button").setAttribute("aria-label", "Próxima carta");
   announceQuestion(currentQuestion());
-  state = STATES.IDLE_OPEN;
+  setState(STATES.IDLE_OPEN);
   unlock(activeCard);
 }
 
@@ -179,7 +305,7 @@ function shoeTransform() {
 
 const CENTER = flightPose(0, 0, 0, 1, 0);
 const CENTER_AFTER_TURN = flightPose(0, 0, 0, 1, 0, 360);
-const ARRIVAL_DURATION = 2600;
+// Original entrance: 2.6 seconds; fast entrance: 0.9 seconds.
 
 function offscreenPath(card) {
   const screen = scene.getBoundingClientRect();
@@ -203,9 +329,8 @@ async function move(card, frames, duration, easing) {
 }
 
 async function arriveFromShoe(card, travelX, travelY, pose, outside) {
-  if (reducedMotion.matches) {
-    await pause(100);
-  } else {
+  if (!minimalMotion()) {
+    const duration = motionDuration(2600, 900);
     const flight = move(card, [
       { transform: pose, offset: 0 },
       { transform: flightPose(travelX * .89, travelY + 50, -510, .33, 60, 35), offset: .14 },
@@ -215,15 +340,15 @@ async function arriveFromShoe(card, travelX, travelY, pose, outside) {
       { transform: flightPose(0, outside.above * .48, 70, 1.06, 0, 360), offset: .84 },
       { transform: flightPose(0, -20, 15, 1.02, 0, 360), offset: .96 },
       { transform: CENTER_AFTER_TURN, offset: 1 }
-    ], ARRIVAL_DURATION, "cubic-bezier(.25, .4, .18, 1)");
-    const riseAbove = setTimeout(() => card.classList.remove("is-behind-shoe"), 130);
+    ], duration, "cubic-bezier(.25, .4, .18, 1)");
+    const riseAbove = setTimeout(() => card.classList.remove("is-behind-shoe"), duration * .05);
     const allowFinalClick = setTimeout(() => {
       card.classList.add("can-queue-flip");
       card.removeAttribute("aria-hidden");
       const button = card.querySelector("button");
       button.removeAttribute("aria-disabled");
       button.tabIndex = 0;
-    }, ARRIVAL_DURATION * .84);
+    }, duration * .84);
     try { await flight; }
     finally {
       clearTimeout(riseAbove);
@@ -236,21 +361,27 @@ async function arriveFromShoe(card, travelX, travelY, pose, outside) {
   card.style.transform = CENTER;
 }
 
-async function dealNext() {
-  state = STATES.RETURNING_TO_SHOE;
+async function dealNext(restart = false) {
+  if (!readyForInput()) return;
+  finishInstructions();
+  setState(STATES.RETURNING_TO_SHOE);
   pendingFlip = false;
   const outgoing = activeCard;
   const hadFocus = outgoing.contains(document.activeElement);
   lock(outgoing);
   if (hadFocus) document.activeElement.blur();
   outgoing.setAttribute("aria-hidden", "true");
-  if (session.index === session.order.length - 1) {
+  if (restart) {
+    session = { order: shuffledIds(true), index: 0, block: 1 };
+  } else if (session.index === session.order.length - 1) {
     session.order = shuffledIds();
     session.index = 0;
+    session.block += 1;
   } else {
     session.index += 1;
   }
   announcement.textContent = "";
+  updateInterface();
 
   const incoming = makeCard(currentQuestion());
   const { travelX, travelY, pose } = shoeTransform();
@@ -262,10 +393,11 @@ async function dealNext() {
   layer.append(incoming);
   activeCard = incoming;
 
-  if (reducedMotion.matches) {
+  if (minimalMotion()) {
     await arriveFromShoe(incoming, travelX, travelY, pose, outside);
     outgoing.remove();
   } else {
+    const returnDuration = motionDuration(1400, 500);
     const retreat = move(outgoing, [
       { transform: CENTER, offset: 0 },
       { transform: flightPose(0, outside.below * .56, -70, .89, 20), offset: .17 },
@@ -274,39 +406,42 @@ async function dealNext() {
       { transform: flightPose(outside.left, travelY - 85, -560, .26, 73), offset: .74 },
       { transform: flightPose(travelX - 45, travelY - 65, -620, .24, 70), offset: .89 },
       { transform: pose, offset: 1 }
-    ], 1400, "cubic-bezier(.35, .08, .65, .92)");
-    const sinkBehind = setTimeout(() => outgoing.classList.add("is-behind-shoe"), 1000);
+    ], returnDuration, "cubic-bezier(.35, .08, .65, .92)");
+    const sinkBehind = setTimeout(() => outgoing.classList.add("is-behind-shoe"), returnDuration * .714);
     const completedRetreat = retreat.then(() => {
       clearTimeout(sinkBehind);
       outgoing.remove();
     });
 
     // The next card only emerges after the previous one has circled behind the shoe.
-    await pause(1120);
-    state = STATES.DEALING_NEXT;
+    await pause(returnDuration * .8);
+    setState(STATES.DEALING_NEXT);
     const advance = arriveFromShoe(incoming, travelX, travelY, pose, outside);
     await Promise.all([completedRetreat, advance]);
   }
 
   incoming.removeAttribute("aria-hidden");
-  state = STATES.IDLE_CLOSED;
+  setState(STATES.IDLE_CLOSED);
   unlock(incoming);
   if (hadFocus) incoming.querySelector("button").focus({ preventScroll: true });
   if (pendingFlip) {
     pendingFlip = false;
-    void flipOpen();
+    void runAction(flipOpen);
   }
 }
 
 function activate() {
-  if (state === STATES.IDLE_CLOSED) return flipOpen();
-  if (state === STATES.IDLE_OPEN) return dealNext();
+  if (state === STATES.IDLE_CLOSED) return runAction(flipOpen);
+  if (state === STATES.IDLE_OPEN) return runAction(() => dealNext());
   if (state === STATES.DEALING_NEXT && activeCard?.classList.contains("can-queue-flip")) {
     pendingFlip = true;
     return Promise.resolve(true);
   }
   return Promise.resolve(false);
 }
+
+skipButton.addEventListener("click", () => { if (readyForInput()) void runAction(() => dealNext()); });
+newGameButton.addEventListener("click", () => { if (readyForInput()) void runAction(() => dealNext(true)); });
 
 // Buttons already handle Enter and Space when focused. These keys also work
 // immediately after opening the page, before a keyboard user presses Tab.
@@ -353,16 +488,16 @@ activeCard.style.transform = pose;
 activeCard.classList.add("is-behind-shoe", "is-in-flight");
 activeCard.setAttribute("aria-hidden", "true");
 lock(activeCard);
-state = STATES.DEALING_NEXT;
-void arriveFromShoe(activeCard, travelX, travelY, pose, outside).finally(() => {
+setState(STATES.DEALING_NEXT);
+void arriveFromShoe(activeCard, travelX, travelY, pose, outside).then(() => {
   activeCard.classList.remove("is-behind-shoe", "is-in-flight");
   activeCard.style.transform = CENTER;
   activeCard.removeAttribute("aria-hidden");
-  state = STATES.IDLE_CLOSED;
+  setState(STATES.IDLE_CLOSED);
   unlock(activeCard);
   if (pendingFlip) {
     pendingFlip = false;
-    void flipOpen();
+    void runAction(flipOpen);
   }
-});
+}).catch(reportFailure);
 registerBrowserTools();

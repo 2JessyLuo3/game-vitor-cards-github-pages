@@ -6,6 +6,20 @@
     <meta name="robots" content="noindex,nofollow">
     <meta name="theme-color" content="#1d1c1a">
     <meta name="description" content="Um baralho de perguntas para uma conversa presencial.">
+    <meta property="og:type" content="website">
+    <meta property="og:locale" content="pt_BR">
+    <meta property="og:site_name" content="Game Vitor Cards">
+    <meta property="og:title" content="Game Vitor Cards">
+    <meta property="og:description" content="Uma carta. Uma pergunta. Uma conversa. Um baralho para jogar com quem está perto.">
+    <meta property="og:url" content="https://2jessyluo3.github.io/game-vitor-cards-github-pages/">
+    <meta property="og:image" content="https://2jessyluo3.github.io/game-vitor-cards-github-pages/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Game Vitor Cards: cartas de conversa com bordas verdes, amarelas e vermelhas. Sarah.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Game Vitor Cards">
+    <meta name="twitter:description" content="Uma carta. Uma pergunta. Uma conversa.">
+    <meta name="twitter:image" content="https://2jessyluo3.github.io/game-vitor-cards-github-pages/og.png">
     <title>Game Vitor Cards</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='13' fill='%231d1c1a'/%3E%3Crect x='15' y='9' width='34' height='46' rx='3' fill='%23f7f5ef' stroke='%23a8bea0' stroke-width='3'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
@@ -16,6 +30,23 @@
       <div class="scene-light" aria-hidden="true"></div>
       <div class="floor-shadow" aria-hidden="true"></div>
       <div class="card-layer" id="card-layer"></div>
+      <header class="game-toolbar">
+        <div class="game-progress" role="status" aria-live="polite" aria-atomic="true">
+          <span id="card-count">Carta 1 de 30</span>
+          <span class="deck-count" id="deck-count">Baralho 1</span>
+        </div>
+        <div class="game-settings">
+          <label class="motion-control" for="motion-mode">
+            <span>Animação</span>
+            <select id="motion-mode">
+              <option value="normal">Original</option>
+              <option value="fast">Rápida</option>
+              <option value="reduced" title="Sem movimento">Reduzida</option>
+            </select>
+          </label>
+          <button class="quiet-button" id="new-game" type="button">Novo jogo</button>
+        </div>
+      </header>
 
       <div class="shoe" id="shoe" aria-hidden="true">
         <div class="shoe-shadow"></div>
@@ -29,6 +60,10 @@
         </div>
         <div class="shoe-front"></div>
         <div class="shoe-edge"></div>
+      </div>
+      <div class="card-actions">
+        <p class="game-instruction" id="game-instruction">Toque ou clique na carta para revelar.</p>
+        <button class="quiet-button skip-button" id="skip-card" type="button" disabled>Pular pergunta</button>
       </div>
       <span class="credit">Sarah</span>
       <div class="visually-hidden" id="announcement" aria-live="polite" aria-atomic="true"></div>
