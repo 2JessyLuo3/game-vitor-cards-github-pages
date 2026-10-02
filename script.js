@@ -113,6 +113,7 @@ motionSelect.addEventListener("change", () => {
   writePreference("motion", motionMode);
   updateMotion();
   diceTable?.motionChanged();
+  castleTable?.motionChanged();
   if (minimalMotion() && activeCard) {
     stopInertia(activeCard);
     if (readyForInput()) settleFace(activeCard);
@@ -121,6 +122,7 @@ motionSelect.addEventListener("change", () => {
 reducedMotion.addEventListener?.("change", () => {
   updateMotion();
   diceTable?.motionChanged();
+  castleTable?.motionChanged();
   if (minimalMotion() && activeCard) {
     stopInertia(activeCard);
     if (readyForInput()) settleFace(activeCard);
@@ -155,7 +157,9 @@ let state = STATES.IDLE_CLOSED;
 let activeCard;
 let pendingFlip = false;
 let layoutFrame;
-let gameMode = readPreference("game-mode", "random") === "dice" ? "dice" : "random";
+// Every visit opens the castle, regardless of the last question mode.
+let gameMode = "castle";
+let castleTable;
 let diceBusy = false;
 let diceDeck;
 let diceTable;
@@ -169,15 +173,15 @@ const diceHint = document.getElementById("dice-hint");
 function readyForInput() { return state === STATES.IDLE_CLOSED || state === STATES.IDLE_OPEN; }
 function updateInterface() {
   const ready = readyForInput() && !activeCard?.interaction?.pointer;
-  newGameButton.disabled = !ready || drawerOpen || diceBusy || !QUESTIONS.length || (gameMode === "random" && !activeCard);
+  newGameButton.disabled = !ready || drawerOpen || diceBusy || (gameMode !== "castle" && !QUESTIONS.length) || (gameMode === "random" && !activeCard);
   skipButton.disabled = !ready || drawerOpen || !activeCard || gameMode === "dice";
-  skipButton.hidden = gameMode === "dice";
+  skipButton.hidden = gameMode !== "random";
   motionSelect.disabled = !ready || drawerOpen || diceBusy;
   menuToggle.disabled = !ready || diceBusy;
   diceTable?.setDisabled(!canRollDice());
-  emptyState.hidden = gameMode === "dice" ? Boolean(QUESTIONS.length) : Boolean(activeCard);
-  const countText = gameMode === "dice" ? `Sorteadas ${diceDeck?.used ?? 0} de ${QUESTIONS.length}` : session.order.length ? `Carta ${session.index + 1} de ${session.order.length}` : "Sem perguntas";
-  const blockText = gameMode === "dice" ? `Dado de 10 lados · ${diceDeck?.remaining() ?? QUESTIONS.length} restantes` : `Baralho ${session.block}`;
+  emptyState.hidden = gameMode === "castle" || (gameMode === "dice" ? Boolean(QUESTIONS.length) : Boolean(activeCard));
+  const countText = gameMode === "castle" ? "Castelo de cartas" : gameMode === "dice" ? `Sorteadas ${diceDeck?.used ?? 0} de ${QUESTIONS.length}` : session.order.length ? `Carta ${session.index + 1} de ${session.order.length}` : "Sem perguntas";
+  const blockText = gameMode === "castle" ? `${castleTable?.count() ?? 0} peças na mesa` : gameMode === "dice" ? `Dado de 10 lados · ${diceDeck?.remaining() ?? QUESTIONS.length} restantes` : `Baralho ${session.block}`;
   if (cardCount.textContent !== countText) cardCount.textContent = countText;
   if (deckCount.textContent !== blockText) deckCount.textContent = blockText;
   updateInstruction();
@@ -780,7 +784,8 @@ function activate() {
 skipButton.addEventListener("click", () => { if (readyForInput()) void runAction(() => dealNext()); });
 newGameButton.addEventListener("click", () => {
   if (!readyForInput() || drawerOpen || diceBusy) return;
-  if (gameMode === "dice") { resetBoard(); announcement.textContent = "Novo jogo. Todos os números foram restaurados. Role o dado."; }
+  if (gameMode === "castle") { castleTable.reset(); announcement.textContent = "Mesa vazia. Escolha seus objetos."; }
+  else if (gameMode === "dice") { resetBoard(); announcement.textContent = "Novo jogo. Todos os números foram restaurados. Role o dado."; }
   else void runAction(() => dealNext(true));
 });
 
@@ -833,13 +838,14 @@ function resetBoard(animate=false) {
   diceTable?.setEnabled(gameMode === "dice");
   if(gameMode === "dice") diceTable?.reset();
   resetDiceResult();
+  castleTable?.setEnabled(gameMode === "castle");
   if(activeCard) { cancelInteraction(activeCard); activeCard.getAnimations().forEach(animation=>animation.cancel()); activeCard.remove(); }
   activeCard=null; pendingFlip=false;
   session={order:shuffledIds(true),index:0,block:1};
   scene.style.removeProperty("--card-width"); scene.style.removeProperty("--card-top"); scene.style.removeProperty("height");
   document.documentElement.classList.remove("needs-scroll");
   announcement.textContent="";
-  if(!QUESTIONS.length || gameMode === "dice") { setState(STATES.IDLE_CLOSED); return; }
+  if(!QUESTIONS.length || gameMode !== "random") { setState(STATES.IDLE_CLOSED); return; }
   activeCard=makeCard(currentQuestion()); layer.append(activeCard);
   if(!animate) { activeCard.style.transform=CENTER; unlock(activeCard); setState(STATES.IDLE_CLOSED); return; }
   const card=activeCard, {travelX,travelY,pose}=shoeTransform(), outside=offscreenPath(card);
@@ -919,6 +925,7 @@ undoButton.addEventListener("click",()=>{
 });
 function setDrawer(open) {
   if(open&&(!readyForInput()||diceBusy)) return;
+  if(open) { castleTable?.pause(); castleTable?.setOpen(false, false); }
   if(open && activeCard) { stopInertia(activeCard); settleFace(activeCard); }
   drawerOpen=open; drawer.classList.toggle("is-open",open); drawer.setAttribute("aria-hidden",String(!open)); drawer.inert=!open;
   backdrop.hidden=!open; scene.inert=open;
@@ -945,6 +952,8 @@ function canRollDice() {
 function resetDiceResult() {
   const dice = gameMode === "dice";
   scene.classList.toggle("mode-dice",dice);
+  scene.classList.toggle("mode-castle",gameMode === "castle");
+  scene.setAttribute("aria-label", gameMode === "castle" ? "Castelo de cartas" : "Baralho de perguntas");
   diceResult.hidden=!dice; diceHint.hidden=!dice;
   diceResult.removeAttribute("data-level");
   diceNumber.textContent="—";
@@ -952,7 +961,7 @@ function resetDiceResult() {
   diceDetail.textContent="Clique ou arraste e solte.";
   diceHint.textContent="Clique no dado ou arraste e solte para lançar.";
   document.getElementById("dice-result-label").textContent="DADO DE 10 LADOS";
-  for(const mode of ["random","dice"]) {
+  for(const mode of ["castle","random","dice"]) {
     const button=document.getElementById(`mode-${mode}`), selected=mode===gameMode;
     button.setAttribute("aria-pressed",String(selected));
     button.querySelector(".mode-tag").textContent=selected?"Ativo":"Jogar";
@@ -997,10 +1006,11 @@ diceTable=new window.VitorDice.D10Table({
   busy:value=>{diceBusy=value; updateInterface();},
   motion:()=>minimalMotion()?"reduced":motionMode, random:randomInteger
 });
-for(const mode of ["random","dice"]) document.getElementById(`mode-${mode}`).addEventListener("click",()=>{
+castleTable = new window.VitorCastle.CastleTable({ scene, announce: text => { announcement.textContent = text; }, changed: updateInterface, motion: () => minimalMotion() ? "reduced" : motionMode });
+for(const mode of ["castle","random","dice"]) document.getElementById(`mode-${mode}`).addEventListener("click",()=>{
   if(gameMode===mode||!readyForInput()||diceBusy) return;
-  closeQuestionForm(); setDrawer(false); gameMode=mode; writePreference("game-mode",mode); resetBoard(mode==="random");
-  announcement.textContent=mode==="dice"?"Modo de dado. Role o dado para tirar uma carta.":"Modo de baralho aleatório.";
+  closeQuestionForm(); setDrawer(false); gameMode=mode; resetBoard(mode==="random");
+  announcement.textContent=mode==="castle"?"Castelo de cartas. Escolha os objetos da mesa.":mode==="dice"?"Modo de dado. Role o dado para tirar uma carta.":"Modo de baralho aleatório.";
 });
 renderQuestionList();
 resetBoard(true);

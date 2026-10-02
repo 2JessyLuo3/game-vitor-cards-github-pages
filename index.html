@@ -9,7 +9,9 @@
     <title>Game Vitor Cards</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='13' fill='%231d1c1a'/%3E%3Crect x='15' y='9' width='34' height='46' rx='3' fill='%23f7f5ef' stroke='%23a8bea0' stroke-width='3'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./castle.css">
     <script src="./dice.js" defer></script>
+    <script src="./castle.js" defer></script>
     <script src="./script.js" defer></script>
   </head>
   <body>
@@ -18,10 +20,11 @@
     </button>
     <button class="drawer-backdrop" id="drawer-backdrop" type="button" aria-label="Fechar painel" hidden tabindex="-1"></button>
     <aside class="question-drawer" id="question-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" inert>
-      <div class="drawer-heading"><h1 id="drawer-title">Seu baralho</h1><p>Personalize suas perguntas.</p></div>
+      <div class="drawer-heading"><h1 id="drawer-title">Seu jogo</h1><p>Modos e perguntas.</p></div>
       <section class="mode-section" aria-labelledby="mode-title">
         <h2 id="mode-title">Modos de jogo</h2>
-        <button class="mode-option" id="mode-random" type="button" aria-pressed="true"><span>Baralho aleatório</span><span class="mode-tag">Ativo</span></button>
+        <button class="mode-option" id="mode-castle" type="button" aria-pressed="true"><span>Castelo de cartas</span><span class="mode-tag">Ativo</span></button>
+        <button class="mode-option" id="mode-random" type="button" aria-pressed="false"><span>Baralho aleatório</span><span class="mode-tag">Jogar</span></button>
         <button class="mode-option" id="mode-dice" type="button" aria-pressed="false"><span>Dado de 10 lados</span><span class="mode-tag">Jogar</span></button>
       </section>
       <div class="editor-heading"><h2>Perguntas <span id="question-total">30</span></h2><button class="quiet-button" id="add-question" type="button">Adicionar</button></div>
@@ -37,12 +40,30 @@
       <button class="undo-button" id="undo-edit" type="button" hidden>Desfazer última alteração</button>
       <div class="question-list" id="question-list"></div>
     </aside>
-    <main class="scene" id="scene" aria-label="Baralho de perguntas">
+    <main class="scene mode-castle" id="scene" aria-label="Castelo de cartas">
       <div class="scene-light" aria-hidden="true"></div>
       <div class="floor-shadow" aria-hidden="true"></div>
       <div class="empty-state" id="empty-state" hidden>Seu baralho está vazio.<br>Abra o menu e adicione uma pergunta.</div>
       <div class="card-layer" id="card-layer"></div>
       <div class="dice-floor" id="dice-floor" aria-hidden="true" hidden></div>
+      <section class="castle-workspace" id="castle-workspace" aria-label="Mesa do castelo de cartas" hidden>
+        <div class="castle-pieces" id="castle-pieces"></div>
+        <div class="castle-trash" id="castle-trash" aria-label="Lixeira: arraste e solte uma peça aqui">
+          <svg viewBox="0 0 32 36" fill="none" aria-hidden="true"><path d="M4 9h24M12 9V4h8v5M7 9l2 23h14l2-23M13 14v12M19 14v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Lixeira</span>
+        </div>
+        <p class="castle-hint" id="castle-hint">Escolha um objeto para colocar na mesa.</p>
+      </section>
+      <button class="items-toggle" id="items-toggle" type="button" aria-controls="items-drawer" aria-expanded="false" aria-label="Abrir objetos" hidden><span class="menu-lines" aria-hidden="true"><span></span><span></span><span></span></span><span class="items-toggle-label">Objetos</span></button>
+      <aside class="items-drawer" id="items-drawer" aria-labelledby="items-title" aria-hidden="true" inert hidden>
+        <header><h2 id="items-title">Objetos</h2><span class="items-caption">CASTELO DE CARTAS</span></header>
+        <div class="items-list">
+          <button class="item-option" type="button" data-item="cards"><img src="./assets/card-stack.webp" alt="" draggable="false"><span>Baralho<small>Cartas de quatro naipes</small></span></button>
+          <button class="item-option" type="button" data-item="wood"><canvas class="wood-preview" id="wood-preview" width="240" height="180" aria-hidden="true"></canvas><span>Madeira<small>Graveto cilíndrico</small></span></button>
+          <button class="item-option" type="button" data-item="knife"><img src="./assets/knife.webp" alt="" draggable="false"><span>Faca<small>Para ajustar a madeira</small></span></button>
+          <button class="item-option" type="button" data-item="glue"><img src="./assets/glue.webp" alt="" draggable="false"><span>Cola<small>Para fixar as peças</small></span></button>
+          <button class="item-option" type="button" data-item="dryer"><img src="./assets/dryer.webp" alt="" draggable="false"><span>Secador<small>Para soltar a cola</small></span></button>
+        </div>
+      </aside>
       <canvas class="dice-canvas" id="dice-canvas" aria-hidden="true" hidden></canvas>
       <button class="dice-grab" id="dice-grab" type="button" aria-label="Rolar dado de 10 lados" aria-describedby="dice-hint" hidden></button>
       <aside class="dice-result" id="dice-result" role="status" aria-live="polite" aria-atomic="true" hidden>
@@ -53,8 +74,8 @@
       </aside>
       <header class="game-toolbar">
         <div class="game-progress" role="status" aria-live="polite" aria-atomic="true">
-          <span id="card-count">Carta 1 de 30</span>
-          <span class="deck-count" id="deck-count">Baralho 1</span>
+          <span id="card-count">Castelo de cartas</span>
+          <span class="deck-count" id="deck-count">0 peças na mesa</span>
         </div>
         <div class="game-settings">
           <label class="motion-control" for="motion-mode">
