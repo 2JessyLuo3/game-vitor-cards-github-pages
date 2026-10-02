@@ -112,6 +112,7 @@ motionSelect.addEventListener("change", () => {
   motionMode = motionSelect.value;
   writePreference("motion", motionMode);
   updateMotion();
+  diceTable?.motionChanged();
   if (minimalMotion() && activeCard) {
     stopInertia(activeCard);
     if (readyForInput()) settleFace(activeCard);
@@ -119,6 +120,7 @@ motionSelect.addEventListener("change", () => {
 });
 reducedMotion.addEventListener?.("change", () => {
   updateMotion();
+  diceTable?.motionChanged();
   if (minimalMotion() && activeCard) {
     stopInertia(activeCard);
     if (readyForInput()) settleFace(activeCard);
@@ -153,17 +155,29 @@ let state = STATES.IDLE_CLOSED;
 let activeCard;
 let pendingFlip = false;
 let layoutFrame;
+let gameMode = readPreference("game-mode", "random") === "dice" ? "dice" : "random";
+let diceBusy = false;
+let diceDeck;
+let diceTable;
+let diceLastResult = null;
+const diceResult = document.getElementById("dice-result");
+const diceNumber = document.getElementById("dice-result-number");
+const diceLevel = document.getElementById("dice-result-level");
+const diceDetail = document.getElementById("dice-result-detail");
+const diceHint = document.getElementById("dice-hint");
 
 function readyForInput() { return state === STATES.IDLE_CLOSED || state === STATES.IDLE_OPEN; }
 function updateInterface() {
   const ready = readyForInput() && !activeCard?.interaction?.pointer;
-  newGameButton.disabled = !ready || drawerOpen || !activeCard;
-  skipButton.disabled = !ready || drawerOpen || !activeCard;
-  motionSelect.disabled = !ready || drawerOpen;
-  menuToggle.disabled = !ready;
-  emptyState.hidden = Boolean(activeCard);
-  const countText = session.order.length ? `Carta ${session.index + 1} de ${session.order.length}` : "Sem perguntas";
-  const blockText = `Baralho ${session.block}`;
+  newGameButton.disabled = !ready || drawerOpen || diceBusy || !QUESTIONS.length || (gameMode === "random" && !activeCard);
+  skipButton.disabled = !ready || drawerOpen || !activeCard || gameMode === "dice";
+  skipButton.hidden = gameMode === "dice";
+  motionSelect.disabled = !ready || drawerOpen || diceBusy;
+  menuToggle.disabled = !ready || diceBusy;
+  diceTable?.setDisabled(!canRollDice());
+  emptyState.hidden = gameMode === "dice" ? Boolean(QUESTIONS.length) : Boolean(activeCard);
+  const countText = gameMode === "dice" ? `Sorteadas ${diceDeck?.used ?? 0} de ${QUESTIONS.length}` : session.order.length ? `Carta ${session.index + 1} de ${session.order.length}` : "Sem perguntas";
+  const blockText = gameMode === "dice" ? `Dado de 10 lados · ${diceDeck?.remaining() ?? QUESTIONS.length} restantes` : `Baralho ${session.block}`;
   if (cardCount.textContent !== countText) cardCount.textContent = countText;
   if (deckCount.textContent !== blockText) deckCount.textContent = blockText;
   updateInstruction();
@@ -173,7 +187,7 @@ function updateInterface() {
 function updateInstruction() {
   const questionText = activeCard?.querySelector(".card-question");
   const needsScroll = questionText && questionText.scrollHeight > questionText.clientHeight + 1;
-  instruction.hidden = !activeCard;
+  instruction.hidden = !activeCard || gameMode === "dice";
   instruction.textContent = needsScroll
     ? "Clique para virar. Arraste para girar. Para ler tudo: roda do mouse ou dois dedos."
     : "Clique para virar. Arraste e solte para girar. Próximo troca a pergunta.";
@@ -241,7 +255,7 @@ function runAction(action) {
   catch (error) { reportFailure(error); return Promise.resolve(); }
 }
 
-function currentQuestion() { return questionById.get(session.order[session.index]); }
+function currentQuestion() { return gameMode === "dice" ? diceLastResult?.question : questionById.get(session.order[session.index]); }
 function pause(milliseconds) { return new Promise(resolve => setTimeout(resolve, milliseconds)); }
 
 function makeCard(question, revealed = false) {
@@ -453,7 +467,7 @@ function attachInteraction(card, button) {
       button.setPointerCapture(event.pointerId);
       return;
     }
-    if (drawerOpen || card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
+    if (drawerOpen || diceBusy || card !== activeCard || !readyForInput() || interaction.pointer || !event.isPrimary || event.button !== 0) return;
     stopInertia(card);
     // The card wrapper stays centered while its inner rotor turns. Capture the
     // grab point from that stable rectangle, not from the rotating face bounds.
@@ -576,7 +590,7 @@ function announceQuestion(question) {
 }
 
 async function flipCard() {
-  if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer) return;
+  if (!readyForInput() || drawerOpen || diceBusy || !activeCard || activeCard.interaction.pointer) return;
   const card = activeCard;
   const interaction = card.interaction;
   stopInertia(card);
@@ -680,7 +694,8 @@ async function arriveFromShoe(card, travelX, travelY, pose, outside) {
   card.style.transform = CENTER;
 }
 
-async function dealNext(restart = false) {
+async function dealNext(restart = false, diceQuestion = null) {
+  if (gameMode === "dice" && !diceQuestion) return;
   if (!readyForInput() || drawerOpen || !activeCard || activeCard.interaction.pointer) return;
   finishInstructions();
   setState(STATES.RETURNING_TO_SHOE);
@@ -691,7 +706,9 @@ async function dealNext(restart = false) {
   lock(outgoing);
   if (hadFocus) document.activeElement.blur();
   outgoing.setAttribute("aria-hidden", "true");
-  if (restart) {
+  if (diceQuestion) {
+    // The D10 bag already consumed this question. Never reshuffle it here.
+  } else if (restart) {
     session = { order: shuffledIds(true), index: 0, block: 1 };
   } else if (session.index === session.order.length - 1) {
     session.order = shuffledIds();
@@ -703,7 +720,7 @@ async function dealNext(restart = false) {
   announcement.textContent = "";
   updateInterface();
 
-  const incoming = makeCard(currentQuestion());
+  const incoming = makeCard(diceQuestion ?? currentQuestion());
   const { travelX, travelY, pose } = shoeTransform();
   const outside = offscreenPath(outgoing);
   incoming.style.transform = pose;
@@ -751,7 +768,7 @@ async function dealNext(restart = false) {
 }
 
 function activate() {
-  if (drawerOpen || !activeCard) return Promise.resolve(false);
+  if (drawerOpen || diceBusy || !activeCard) return Promise.resolve(false);
   if (readyForInput()) return runAction(flipCard);
   if (state === STATES.DEALING_NEXT && activeCard?.classList.contains("can-queue-flip")) {
     pendingFlip = true;
@@ -761,7 +778,11 @@ function activate() {
 }
 
 skipButton.addEventListener("click", () => { if (readyForInput()) void runAction(() => dealNext()); });
-newGameButton.addEventListener("click", () => { if (readyForInput()) void runAction(() => dealNext(true)); });
+newGameButton.addEventListener("click", () => {
+  if (!readyForInput() || drawerOpen || diceBusy) return;
+  if (gameMode === "dice") { resetBoard(); announcement.textContent = "Novo jogo. Todos os números foram restaurados. Role o dado."; }
+  else void runAction(() => dealNext(true));
+});
 
 // Buttons already handle Enter and Space when focused. These keys also work
 // immediately after opening the page, before a keyboard user presses Tab.
@@ -793,7 +814,10 @@ function registerBrowserTools() {
               (name === "reveal_question" && activeCard.interaction.textVisible)) {
             throw new Error("A carta ainda não está pronta para esta ação.");
           }
-          if (name === "advance_card") await runAction(() => dealNext());
+          if (name === "advance_card") {
+            if (gameMode === "dice") throw new Error("No modo de dado, role o dado para trocar a pergunta.");
+            await runAction(() => dealNext());
+          }
           else await runAction(flipCard);
           const question = currentQuestion();
           return { id: question.id, level: question.level,
@@ -805,13 +829,17 @@ function registerBrowserTools() {
 }
 
 function resetBoard(animate=false) {
+  diceBusy=false; diceLastResult=null; diceDeck=new window.VitorDice.DiceDeck(QUESTIONS,randomInteger);
+  diceTable?.setEnabled(gameMode === "dice");
+  if(gameMode === "dice") diceTable?.reset();
+  resetDiceResult();
   if(activeCard) { cancelInteraction(activeCard); activeCard.getAnimations().forEach(animation=>animation.cancel()); activeCard.remove(); }
   activeCard=null; pendingFlip=false;
   session={order:shuffledIds(true),index:0,block:1};
   scene.style.removeProperty("--card-width"); scene.style.removeProperty("--card-top"); scene.style.removeProperty("height");
   document.documentElement.classList.remove("needs-scroll");
   announcement.textContent="";
-  if(!QUESTIONS.length) { setState(STATES.IDLE_CLOSED); return; }
+  if(!QUESTIONS.length || gameMode === "dice") { setState(STATES.IDLE_CLOSED); return; }
   activeCard=makeCard(currentQuestion()); layer.append(activeCard);
   if(!animate) { activeCard.style.transform=CENTER; unlock(activeCard); setState(STATES.IDLE_CLOSED); return; }
   const card=activeCard, {travelX,travelY,pose}=shoeTransform(), outside=offscreenPath(card);
@@ -890,7 +918,7 @@ undoButton.addEventListener("click",()=>{
   closeQuestionForm(); commitQuestions(questionUndo.pop(),"Alteração desfeita.",false); document.getElementById("add-question").focus();
 });
 function setDrawer(open) {
-  if(open&&!readyForInput()) return;
+  if(open&&(!readyForInput()||diceBusy)) return;
   if(open && activeCard) { stopInertia(activeCard); settleFace(activeCard); }
   drawerOpen=open; drawer.classList.toggle("is-open",open); drawer.setAttribute("aria-hidden",String(!open)); drawer.inert=!open;
   backdrop.hidden=!open; scene.inert=open;
@@ -908,6 +936,71 @@ document.addEventListener("keydown",event=>{
     const index=controls.indexOf(document.activeElement), next=event.shiftKey?(index<=0?controls.length-1:index-1):(index+1)%controls.length;
     event.preventDefault(); controls[next]?.focus();
   }
+});
+// Dice UI and tabletop are created once; switching modes never accumulates listeners.
+function canRollDice() {
+  return gameMode === "dice" && !drawerOpen && !diceBusy && readyForInput() &&
+    !activeCard?.interaction.pointer && Boolean(diceDeck?.remaining());
+}
+function resetDiceResult() {
+  const dice = gameMode === "dice";
+  scene.classList.toggle("mode-dice",dice);
+  diceResult.hidden=!dice; diceHint.hidden=!dice;
+  diceResult.removeAttribute("data-level");
+  diceNumber.textContent="—";
+  diceLevel.textContent=QUESTIONS.length?"Role o dado":"Sem perguntas";
+  diceDetail.textContent="Clique ou arraste e solte.";
+  diceHint.textContent="Clique no dado ou arraste e solte para lançar.";
+  document.getElementById("dice-result-label").textContent="DADO DE 10 LADOS";
+  for(const mode of ["random","dice"]) {
+    const button=document.getElementById(`mode-${mode}`), selected=mode===gameMode;
+    button.setAttribute("aria-pressed",String(selected));
+    button.querySelector(".mode-tag").textContent=selected?"Ativo":"Jogar";
+  }
+}
+function beginDiceRoll() {
+  if(!canRollDice()) return null;
+  if(activeCard) stopInertia(activeCard);
+  const result=diceDeck.draw();
+  if(!result) return null;
+  diceResult.removeAttribute("data-level");
+  document.getElementById("dice-result-label").textContent="ROLANDO…";
+  diceNumber.textContent="…"; diceLevel.textContent=""; diceDetail.textContent="";
+  announcement.textContent="Rolando o dado.";
+  return result;
+}
+async function dealDiceQuestion(result) {
+  diceLastResult=result;
+  document.getElementById("dice-result-label").textContent="RESULTADO";
+  diceNumber.textContent=String(result.number);
+  diceLevel.textContent=`Nível ${result.level} · ${["Verde","Amarelo","Vermelho"][result.level-1]}`;
+  diceDetail.textContent=`Pergunta ${result.ordinal} · ${diceDeck.remaining()} restantes`;
+  diceResult.dataset.level=String(result.level);
+  diceHint.textContent=diceDeck.remaining()?"Clique no dado ou arraste e solte para a próxima carta.":"Todas as perguntas saíram. Clique em Novo jogo para recomeçar.";
+  announcement.textContent=`Dado: ${result.number}. Nível ${result.level}. Clique na carta para mostrar a pergunta.`;
+  if(activeCard) { await dealNext(false,result.question); return; }
+  activeCard=makeCard(result.question); layer.append(activeCard);
+  const card=activeCard, {travelX,travelY,pose}=shoeTransform(), outside=offscreenPath(card);
+  card.style.transform=pose; card.classList.add("is-behind-shoe","is-in-flight"); card.setAttribute("aria-hidden","true"); lock(card);
+  setState(STATES.DEALING_NEXT);
+  await arriveFromShoe(card,travelX,travelY,pose,outside);
+  card.removeAttribute("aria-hidden"); unlock(card); setState(STATES.IDLE_CLOSED);
+}
+diceTable=new window.VitorDice.D10Table({
+  scene, canvas:document.getElementById("dice-canvas"), button:document.getElementById("dice-grab"), floor:document.getElementById("dice-floor"),
+  cardRect:()=>{
+    if(!activeCard || !readyForInput()) return null;
+    const base=scene.getBoundingClientRect(), bounds=activeCard.querySelector(".card-rotor").getBoundingClientRect();
+    return {left:bounds.left-base.left,right:bounds.right-base.left,top:bounds.top-base.top,bottom:bounds.bottom-base.top};
+  },
+  canRoll:canRollDice, begin:beginDiceRoll, complete:result=>void runAction(()=>dealDiceQuestion(result)),
+  busy:value=>{diceBusy=value; updateInterface();},
+  motion:()=>minimalMotion()?"reduced":motionMode, random:randomInteger
+});
+for(const mode of ["random","dice"]) document.getElementById(`mode-${mode}`).addEventListener("click",()=>{
+  if(gameMode===mode||!readyForInput()||diceBusy) return;
+  closeQuestionForm(); setDrawer(false); gameMode=mode; writePreference("game-mode",mode); resetBoard(mode==="random");
+  announcement.textContent=mode==="dice"?"Modo de dado. Role o dado para tirar uma carta.":"Modo de baralho aleatório.";
 });
 renderQuestionList();
 resetBoard(true);

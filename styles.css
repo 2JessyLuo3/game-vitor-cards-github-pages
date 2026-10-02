@@ -520,3 +520,54 @@ html.needs-scroll .card-level { left: 8%; right: 8%; letter-spacing: .08em; whit
 @media (prefers-reduced-motion:reduce) { .menu-toggle, .menu-lines, .question-drawer { transition:none; } }
 
 .empty-state { position:absolute; left:50%; top:46%; transform:translate(-50%,-50%); width:min(300px,75vw); text-align:center; color:#ccc5b6; line-height:1.6; font-size:1rem; }
+
+/* D10 mode: the tabletop extends behind the card; only the die catches input. */
+.mode-option { width:100%; color:#fff; font-family:inherit; text-align:left; cursor:pointer; touch-action:manipulation; }
+.mode-option[aria-pressed="false"] { background:#000; border-color:#555; color:#ccc; }
+.mode-option:hover { border-color:#fff; }
+.mode-option:focus-visible { outline:2px solid #fff; outline-offset:3px; }
+.dice-floor { position:absolute; z-index:1; inset:auto 0 0; height:auto; pointer-events:none; border-top:1px solid #ffffff0c;
+  background:radial-gradient(ellipse 60% 80% at 66% 64%,#4a474034,transparent 80%),linear-gradient(#ffffff02,#0003); }
+.dice-canvas { position:absolute; z-index:7; inset:0; width:100%; height:100%; pointer-events:none; }
+.dice-grab { position:absolute; z-index:8; transform:translate(-50%,-50%); border:0; border-radius:32%; padding:0; background:transparent;
+  cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
+.dice-grab.is-grabbed { cursor:grabbing; }
+.dice-grab:disabled { cursor:default; }
+.dice-grab:focus-visible { outline:2px solid #f3e3b8; outline-offset:5px; }
+.dice-result { --result-accent:#eee5d4; position:absolute; z-index:9; right:max(26px,env(safe-area-inset-right)); top:44%; transform:translateY(-50%);
+  width:180px; display:grid; justify-items:center; gap:8px; text-align:center; color:#eee9dd; border-top:2px solid var(--result-accent); padding:16px 4px;
+  pointer-events:none; font-size:.875rem; }
+.dice-result[data-level="1"] { --result-accent:var(--green); }
+.dice-result[data-level="2"] { --result-accent:var(--yellow); }
+.dice-result[data-level="3"] { --result-accent:var(--red); }
+.dice-result-label { font-size:.75rem; letter-spacing:.09em; color:#c9c3b7; }
+.dice-result-number { font-size:3.8rem; line-height:1; font-weight:400; color:var(--result-accent); font-variant-numeric:tabular-nums; }
+.dice-result small { font-size:.75rem; color:#bfb8ab; line-height:1.45; }
+.dice-hint { margin:0; color:#d4cec1; font-size:.875rem; text-align:center; line-height:1.45; }
+.mode-dice .card-actions { width:min(80vw,400px); }
+.mode-dice .card-level { bottom:clamp(25px,6.5vw,33px); }
+@media(max-width:800px) and (min-width:601px) {
+  .mode-dice { --card-width:min(48vw,350px,calc((100dvh - 240px) * .7142857)); }
+  .mode-dice .card { left:43%; }
+  .dice-result { right:14px; width:105px; }
+}
+@media(max-width:600px) {
+  .mode-dice { --card-width:min(54vw,280px,calc((100dvh - 265px) * .7142857)); }
+  .mode-dice .card { left:38%; }
+  .mode-dice .card-question { font-size:clamp(1rem,4.4vw,1.3rem); }
+  .mode-dice .card-face { padding:18px; }
+  .mode-dice .card-face--front { padding-bottom:58px; }
+  .mode-dice .shoe { left:14%; width:75px; height:55px; top:70%; }
+  .dice-result { right:12px; width:23vw; gap:6px; padding:12px 0; font-size:.8125rem; }
+  .dice-result-number { font-size:2.8rem; }
+  .dice-result-label { letter-spacing:0; }
+  .mode-dice .deck-count { max-width:125px; }
+}
+@media(max-height:540px) and (orientation:landscape) {
+  .mode-dice { --card-width:min(35vw,260px,calc((100dvh - 95px) * .7142857)); }
+  .mode-dice .card { left:40%; }
+  .dice-result { top:40%; right:25px; width:140px; gap:4px; padding:8px 0; }
+  .dice-result-number { font-size:2.8rem; }
+  .mode-dice .card-actions { left:auto; right:18px; top:auto; bottom:35px; width:26vw; transform:none; }
+  .mode-dice .shoe { top:71%; }
+}
